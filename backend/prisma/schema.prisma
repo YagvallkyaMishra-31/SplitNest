@@ -1,0 +1,282 @@
+// =============================================================================
+// Prisma Schema — SplitNest Shared Expenses App
+// =============================================================================
+// This file IS the database. Every table, column, and relationship is defined
+// here. Prisma reads this file to generate migrations (SQL) and a type-safe
+// client for queries.
+//
+// To apply changes: npx prisma migrate dev --name <description>
+// To regenerate client: npx prisma generate
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// USERS — People who share expenses
+// =============================================================================
+// Every expense has a payer and participants. This table is the canonical list
+// of people. During CSV import, names like "priya", "Priya S" are normalized
+// to match a single user record here.
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String   // Display name, e.g., "Aisha", "Rohan"
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relationships: all the things a user can be connected to
+  memberships    GroupMembership[]
+  expensesPaid   Expense[]         @relation("payer")
+  expenseSplits  ExpenseSplit[]
+  settlementsSent     Settlement[] @relation("settlement_payer")
+  settlementsReceived Settlement[] @relation("settlement_recipient")
+  groupsCreated  Group[]           @relation("group_creator")
+  importSessions ImportSession[]   @relation("importer")
+  approvedSessions ImportSession[] @relation("approver")
+
+  @@map("users")
+}
+
+// =============================================================================
+// GROUPS — Named expense-sharing groups
+// =============================================================================
+// Examples: "Flat 4B" (the apartment), "Goa Trip" (a temporary trip group).
+// Expenses and settlements belong to a group, so balances are calculated
+// per-group.
+model Group {
+  id          String   @id @default(uuid())
+  name        String   // e.g., "Flat 4B", "Goa Trip"
+  description String?  // Optional longer description
+  createdBy   String   @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relationships
+  creator     User            @relation("group_creator", fields: [createdBy], references: [id])
+  memberships GroupMembership[]
+  expenses    Expense[]
+  settlements Settlement[]
+
+  @@map("groups")
+}
+
+// =============================================================================
+// GROUP_MEMBERSHIPS — Who was in which group, and WHEN
+// =============================================================================
+// This is the MOST CRITICAL table. It answers: "Was Person X an active member
+// of Group G on Date D?"
+//
+// Rule: A person is active on date D if:
+//   joined_at <= D AND (left_at IS NULL OR left_at >= D)
+//
+// This drives the STALE_MEMBERSHIP check during CSV import. If someone in
+// split_with was not active on the expense date, they are excluded.
+//
+// See DECISIONS.md D-010 for the full guest vs stale-member decision tree.
+model GroupMembership {
+  id       String    @id @default(uuid())
+  groupId  String    @map("group_id")
+  userId   String    @map("user_id")
+  joinedAt DateTime  @map("joined_at") @db.Date // DATE, not TIMESTAMP — we only care about the day
+  leftAt   DateTime? @map("left_at") @db.Date   // NULL = still active
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relationships
+  group Group @relation(fields: [groupId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  // A person can only have one active membership per group at a time
+  // (they can rejoin later — that creates a new row with a new joinedAt)
+  @@unique([groupId, userId, joinedAt])
+  @@map("group_memberships")
+}
+
+// =============================================================================
+// EXPENSES — What was paid, by whom, how much, how split
+// =============================================================================
+// Each row = one shared expense. The payer fronted the money; the splits
+// (in expense_splits) record who owes what portion.
+//
+// Currency handling (see DECISIONS.md D-005, D-011):
+//   - original_amount + original_currency = what the CSV/user entered (e.g., 540 USD)
+//   - amount + currency = the normalized INR value (e.g., 44820 INR)
+//   - exchange_rate connects them: original_amount * exchange_rate = amount
+//   - For INR expenses, exchange_rate = 1.0 (schema uniformity, not an oversight)
+//
+// Soft delete (is_deleted): used for duplicates flagged during import. The row
+// stays in the DB for the import report, but is excluded from balance calculations.
+model Expense {
+  id               String   @id @default(uuid())
+  groupId          String   @map("group_id")
+  date             DateTime @db.Date // The date the expense happened
+  description      String
+  paidById         String?  @map("paid_by") // NULL = payer unknown (see anomaly #6, MISSING_PAYER)
+  amount           Decimal  @db.Decimal(12, 2) // Normalized INR amount
+  originalAmount   Decimal  @map("original_amount") @db.Decimal(12, 2) // Original amount before FX
+  originalCurrency String   @map("original_currency") @db.VarChar(3) // "INR" or "USD"
+  currency         String   @default("INR") @db.VarChar(3) // Always INR (normalized)
+  exchangeRate     Decimal  @map("exchange_rate") @db.Decimal(10, 4) // 1.0 for INR, 83.0 for USD
+  splitType        String   @map("split_type") @db.VarChar(20) // equal, unequal, percentage, share
+  notes            String?  // Free-text notes from CSV or user
+  isDeleted        Boolean  @default(false) @map("is_deleted") // Soft delete for duplicates
+
+  // Traceability fields — link back to the CSV import
+  importSessionId  String?  @map("import_session_id")
+  csvRowNumber     Int?     @map("csv_row_number") // Immutable line number in original CSV (see D-007)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relationships
+  group        Group          @relation(fields: [groupId], references: [id])
+  paidBy       User?          @relation("payer", fields: [paidById], references: [id])
+  splits       ExpenseSplit[]
+  importSession ImportSession? @relation(fields: [importSessionId], references: [id])
+
+  @@map("expenses")
+}
+
+// =============================================================================
+// EXPENSE_SPLITS — Each person's exact share of each expense
+// =============================================================================
+// This is the table that makes balances TRACEABLE. When Rohan asks "why do I
+// owe Aisha ₹5,000?", we query this table and list every row where Rohan is
+// the user_id, joined with the expense to see who paid.
+//
+// Rounding policy (see DECISIONS.md D-006):
+//   - Amounts are in paise precision (2 decimal places)
+//   - Equal split remainder goes to the payer
+//   - SUM(splits.amount) for an expense MUST equal expense.amount exactly
+//
+// share_value stores the raw input (e.g., share=2, percentage=30, amount=700)
+// alongside the computed amount, so we can reconstruct the split logic during audit.
+model ExpenseSplit {
+  id        String  @id @default(uuid())
+  expenseId String  @map("expense_id")
+  userId    String  @map("user_id")
+  amount    Decimal @db.Decimal(12, 2) // Exact INR amount this person owes
+  shareValue Decimal? @map("share_value") @db.Decimal(10, 4) // Raw input: share count, percentage, or explicit amount
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relationships
+  expense Expense @relation(fields: [expenseId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@map("expense_splits")
+}
+
+// =============================================================================
+// SETTLEMENTS — Direct payments between people
+// =============================================================================
+// A settlement is fundamentally different from an expense:
+//   - Expense: "I paid for something shared, now others owe me their portions"
+//   - Settlement: "I'm paying back money I owe, reducing our mutual balance"
+//
+// Row 14 ("Rohan paid Aisha back", ₹5,000) is a settlement.
+// Row 38 ("Sam deposit share", ₹15,000) is also imported as a settlement
+// (see DECISIONS.md D-009 for the standing-credit semantics).
+//
+// The balance engine subtracts settlements from the expense-based debt
+// between two people. See the balance formula in the implementation plan.
+model Settlement {
+  id       String   @id @default(uuid())
+  groupId  String   @map("group_id")
+  date     DateTime @db.Date
+  paidById String   @map("paid_by") // Who sent the money
+  paidToId String   @map("paid_to") // Who received the money
+  amount   Decimal  @db.Decimal(12, 2) // How much (INR)
+  notes    String?
+
+  // Traceability fields
+  importSessionId String? @map("import_session_id")
+  csvRowNumber    Int?    @map("csv_row_number")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relationships
+  group        Group          @relation(fields: [groupId], references: [id])
+  paidBy       User           @relation("settlement_payer", fields: [paidById], references: [id])
+  paidTo       User           @relation("settlement_recipient", fields: [paidToId], references: [id])
+  importSession ImportSession? @relation(fields: [importSessionId], references: [id])
+
+  @@map("settlements")
+}
+
+// =============================================================================
+// IMPORT_SESSIONS — When was data imported? (batch tracking + approval workflow)
+// =============================================================================
+// The import is a two-step process:
+//   1. Upload & validate → status = "pending", anomalies logged, nothing committed
+//   2. User reviews & approves → status = "approved", data committed to balances
+//
+// This is the "staging step" required by the spec. The session groups all
+// anomalies and imported records together for the Import Report screen.
+model ImportSession {
+  id            String    @id @default(uuid())
+  filename      String    // Original CSV filename
+  status        String    @default("pending") @db.VarChar(20) // pending | approved | rejected
+  totalRows     Int       @map("total_rows") // Total data rows in CSV
+  importedCount Int       @default(0) @map("imported_count") // Successfully imported
+  anomalyCount  Int       @default(0) @map("anomaly_count")
+  importedById  String    @map("imported_by")
+  approvedById  String?   @map("approved_by")
+
+  createdAt  DateTime  @default(now()) @map("created_at")
+  approvedAt DateTime? @map("approved_at")
+
+  // Relationships
+  importedBy User            @relation("importer", fields: [importedById], references: [id])
+  approvedBy User?           @relation("approver", fields: [approvedById], references: [id])
+  anomalies  ImportAnomaly[]
+  expenses   Expense[]
+  settlements Settlement[]
+
+  @@map("import_sessions")
+}
+
+// =============================================================================
+// IMPORT_ANOMALIES — Every issue detected during CSV import
+// =============================================================================
+// Nothing is silently dropped or guessed. Every transformation is logged here.
+//
+// The anomaly type codes and what goes in original_value / resolved_value
+// are defined in SCOPE.md — the import code implements that spec.
+//
+// action_taken values:
+//   - auto_fixed: issue detected and resolved automatically (e.g., name normalization)
+//   - flagged: requires user decision in the approval step (e.g., probable duplicate)
+//   - needs_review: blocked until user provides missing data (e.g., missing payer)
+//   - excluded: row was excluded from import entirely
+//
+// user_override: if the user changed the auto-decision during approval,
+//   this field records what they chose (e.g., "keep both" for a duplicate)
+model ImportAnomaly {
+  id              String  @id @default(uuid())
+  importSessionId String  @map("import_session_id")
+  csvRowNumber    Int     @map("csv_row_number") // Which row in the original CSV
+  anomalyType     String  @map("anomaly_type") @db.VarChar(50) // e.g., DUPLICATE_EXPENSE, NAME_CASE
+  severity        String  @db.VarChar(20) // error, warning, info
+  field           String? @db.VarChar(100) // Which CSV column triggered this
+  originalValue   String? @map("original_value") // What the CSV said
+  resolvedValue   String? @map("resolved_value") // What we changed it to
+  description     String  // Human-readable explanation
+  actionTaken     String  @map("action_taken") @db.VarChar(50) // auto_fixed, flagged, needs_review, excluded
+  userOverride    String? @map("user_override") // User's manual decision (if any)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relationships
+  importSession ImportSession @relation(fields: [importSessionId], references: [id])
+
+  @@map("import_anomalies")
+}

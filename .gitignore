@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Environment variables (contains DB credentials, JWT secrets)
+.env
+
+# Build output
+dist/
+build/
+
+# Prisma generated client (regenerated from schema)
+backend/node_modules/.prisma/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
