@@ -338,3 +338,26 @@ identical either way. But we still log the conflict: the note itself says
 split_details were added by mistake. Our rule correctly ignores them.
 
 ---
+
+## D-013: Prisma Version — v5 (Stable) over v7 (Latest)
+
+**Date:** 2026-06-14  
+**Decision:** Use Prisma v5 (latest stable 5.x) instead of Prisma v7 (latest).
+
+**What happened:** npm installed Prisma v7.8.0 by default. Prisma 7 has
+breaking changes: the `url` field in `datasource` is removed from schema.prisma
+and must be configured in a separate `prisma.config.ts` file using ESM imports.
+This adds complexity (TypeScript config file, ESM module mode) that doesn't
+help our use case and is harder to explain in a code review.
+
+**Why v5:** Prisma 5 is the last major version where the schema file is
+self-contained — `datasource db { url = env("DATABASE_URL") }` works directly.
+No extra config files, no ESM requirement. The schema file remains the single
+source of truth, which was the whole point of choosing Prisma (D-002).
+
+> **AI_USAGE flag:** This is a case where the AI (Antigravity/Claude) initially
+> installed the wrong version without checking for breaking changes. The error
+> was caught by `npx prisma validate`, diagnosed, and corrected by downgrading.
+> Log this in AI_USAGE.md as correction #1.
+
+---
