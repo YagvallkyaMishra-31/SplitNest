@@ -67,6 +67,22 @@ app.get('/api/health', (req, res) => {
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
 
+// Group routes (CRUD groups, members, balances)
+const groupRoutes = require('./routes/groups');
+app.use('/api/groups', groupRoutes);
+
+// Expense routes (CRUD expenses with split calculation)
+const expenseRoutes = require('./routes/expenses');
+app.use('/api/expenses', expenseRoutes);
+
+// Settlement routes (create, list direct payments)
+const settlementRoutes = require('./routes/settlements');
+app.use('/api/settlements', settlementRoutes);
+
+// Import routes (upload CSV, review anomalies, approve/reject)
+const importRoutes = require('./routes/import');
+app.use('/api/import', importRoutes);
+
 // =============================================================================
 // Error Handling
 // =============================================================================
