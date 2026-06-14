@@ -83,6 +83,10 @@ app.use('/api/settlements', settlementRoutes);
 const importRoutes = require('./routes/import');
 app.use('/api/import', importRoutes);
 
+// User routes (search, list, create)
+const userRoutes = require('./routes/users');
+app.use('/api/users', userRoutes);
+
 // =============================================================================
 // Error Handling
 // =============================================================================

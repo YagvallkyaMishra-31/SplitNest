@@ -24,6 +24,8 @@ export default function GroupDetail() {
   const [expandedExpense, setExpandedExpense] = useState(null);
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [showSettle, setShowSettle] = useState(null);
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [showSetLeftDate, setShowSetLeftDate] = useState(null);
   const [error, setError] = useState('');
 
   const loadData = useCallback(async () => {
@@ -117,13 +119,13 @@ export default function GroupDetail() {
 
         {/* Tabs */}
         <div className="gd-tabs">
-          {['expenses', 'balances', 'activity'].map(t => (
+          {['expenses', 'balances', 'activity', 'members'].map(t => (
             <button
               key={t}
               className={`gd-tab ${tab === t ? 'active' : ''}`}
               onClick={() => setTab(t)}
             >
-              {t === 'expenses' ? '💳 Expenses' : t === 'balances' ? '⚖️ Balances' : '📊 Activity'}
+              {t === 'expenses' ? '💳 Expenses' : t === 'balances' ? '⚖️ Balances' : t === 'activity' ? '📊 Activity' : '👥 Members'}
             </button>
           ))}
         </div>
@@ -306,6 +308,98 @@ export default function GroupDetail() {
             amount={showSettle.amount}
             onClose={() => setShowSettle(null)}
             onSettled={() => { setShowSettle(null); loadData(); }}
+          />
+        )}
+
+        {/* MEMBERS TAB */}
+        {tab === 'members' && (
+          <div className="animate-fade-in">
+            <div className="gd-title-row" style={{ marginBottom: 'var(--space-md)' }}>
+              <div>
+                <h3 className="balances-section-title" style={{ margin: 0 }}>Group Members</h3>
+                <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>
+                  Manage active and former participants of this group.
+                </p>
+              </div>
+              <button className="btn btn-primary" onClick={() => setShowAddMember(true)}>
+                + Add Member
+              </button>
+            </div>
+
+            {/* Active Members */}
+            <div className="balances-section" style={{ marginBottom: 'var(--space-lg)' }}>
+              <h4 className="balances-section-title">Active Members ({group?.memberships?.filter(m => !m.leftAt).length || 0})</h4>
+              <div className="member-list">
+                {group?.memberships?.filter(m => !m.leftAt).map((m, i) => (
+                  <div key={m.id} className="member-card animate-fade-in-up" style={{ animationDelay: `${i * 0.05}s` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div className={`member-avatar ${AVATAR_COLORS[i % 8]}`}>
+                        {m.user?.name?.[0]?.toUpperCase()}
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{m.user?.name}</div>
+                        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>{m.user?.email}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+                        Joined {formatDate(m.joinedAt)}
+                      </span>
+                      {group?.memberships?.filter(m => !m.leftAt).length > 1 && (
+                        <button className="btn btn-sm btn-ghost btn-danger" onClick={() => setShowSetLeftDate(m)}>
+                          Set Left Date
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Former Members */}
+            {group?.memberships?.some(m => m.leftAt) && (
+              <div className="balances-section">
+                <h4 className="balances-section-title">Former Members ({group?.memberships?.filter(m => m.leftAt).length || 0})</h4>
+                <div className="member-list">
+                  {group?.memberships?.filter(m => m.leftAt).map((m, i) => (
+                    <div key={m.id} className="member-card former animate-fade-in-up" style={{ animationDelay: `${i * 0.05}s` }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, opacity: 0.7 }}>
+                        <div className="member-avatar avatar-muted">
+                          {m.user?.name?.[0]?.toUpperCase()}
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{m.user?.name}</div>
+                          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>{m.user?.email}</div>
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+                        {formatDate(m.joinedAt)} — {formatDate(m.leftAt)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ADD MEMBER MODAL */}
+        {showAddMember && (
+          <AddMemberModal
+            groupId={id}
+            existingMembers={allMembers}
+            onClose={() => setShowAddMember(false)}
+            onAdded={() => { setShowAddMember(false); loadData(); }}
+          />
+        )}
+
+        {/* SET LEFT DATE MODAL */}
+        {showSetLeftDate && (
+          <SetLeftDateModal
+            groupId={id}
+            membership={showSetLeftDate}
+            onClose={() => setShowSetLeftDate(null)}
+            onSaved={() => { setShowSetLeftDate(null); loadData(); }}
           />
         )}
       </div>
@@ -521,6 +615,256 @@ function SettleModal({ groupId, from, to, amount, onClose, onSettled }) {
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
               {submitting ? 'Recording…' : 'Record Settlement'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ── Add Member Modal ── */
+function AddMemberModal({ groupId, existingMembers, onClose, onAdded }) {
+  const [users, setUsers] = useState([]);
+  const [search, setSearch] = useState('');
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [joinedAt, setJoinedAt] = useState(new Date().toISOString().slice(0, 10));
+  const [isNewUser, setIsNewUser] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    async function fetchUsers() {
+      try {
+        const data = await api.getUsers();
+        const existingIds = new Set(existingMembers.map(m => m.id));
+        const filtered = (data.users || []).filter(u => !existingIds.has(u.id));
+        setUsers(filtered);
+      } catch (err) {
+        setError('Failed to load users: ' + err.message);
+      } finally {
+        setLoadingUsers(false);
+      }
+    }
+    fetchUsers();
+  }, [existingMembers]);
+
+  const filteredUsers = users.filter(u =>
+    u.name.toLowerCase().includes(search.toLowerCase()) ||
+    u.email.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+
+    if (isNewUser) {
+      if (!newName.trim()) {
+        setError('Name is required');
+        return;
+      }
+      setSubmitting(true);
+      try {
+        const newUserData = await api.createUser({
+          name: newName.trim(),
+          email: newEmail.trim() || undefined,
+        });
+        await api.addMember(groupId, {
+          userId: newUserData.user.id,
+          joinedAt,
+        });
+        onAdded();
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setSubmitting(false);
+      }
+    } else {
+      if (!selectedUser) {
+        setError('Please select a user to add');
+        return;
+      }
+      setSubmitting(true);
+      try {
+        await api.addMember(groupId, {
+          userId: selectedUser.id,
+          joinedAt,
+        });
+        onAdded();
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setSubmitting(false);
+      }
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-card" style={{ maxWidth: 450 }}>
+        <h2 className="modal-title">Add Member</h2>
+        {error && <div className="alert alert-error" style={{ marginBottom: 12 }}><span>⚠</span> {error}</div>}
+        
+        <div className="tab-toggle-container" style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          <button
+            type="button"
+            className={`btn btn-sm ${!isNewUser ? 'btn-primary' : 'btn-ghost'}`}
+            style={{ flex: 1 }}
+            onClick={() => { setIsNewUser(false); setError(''); }}
+          >
+            Select Existing
+          </button>
+          <button
+            type="button"
+            className={`btn btn-sm ${isNewUser ? 'btn-primary' : 'btn-ghost'}`}
+            style={{ flex: 1 }}
+            onClick={() => { setIsNewUser(true); setError(''); }}
+          >
+            Create New User
+          </button>
+        </div>
+
+        <form className="modal-form" onSubmit={handleSubmit}>
+          {!isNewUser ? (
+            <div className="input-group">
+              <label>Select User</label>
+              {loadingUsers ? (
+                <div className="skeleton skeleton-line" style={{ height: 40, borderRadius: 6 }} />
+              ) : (
+                <>
+                  <input
+                    className="input-field"
+                    style={{ marginBottom: 8 }}
+                    value={search}
+                    onChange={e => { setSearch(e.target.value); setSelectedUser(null); }}
+                    placeholder="Type name or email to filter..."
+                  />
+                  <div className="user-dropdown-list">
+                    {filteredUsers.length === 0 ? (
+                      <div className="dropdown-item empty">No matching users found</div>
+                    ) : (
+                      filteredUsers.map(u => (
+                        <div
+                          key={u.id}
+                          className={`dropdown-item ${selectedUser?.id === u.id ? 'selected' : ''}`}
+                          onClick={() => { setSelectedUser(u); setSearch(u.name); }}
+                        >
+                          <div style={{ fontWeight: 500 }}>{u.name}</div>
+                          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>{u.email}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="input-group">
+                <label>Name *</label>
+                <input
+                  className="input-field"
+                  value={newName}
+                  onChange={e => setNewName(e.target.value)}
+                  placeholder="e.g., John Doe"
+                  required
+                />
+              </div>
+              <div className="input-group">
+                <label>Email (optional)</label>
+                <input
+                  className="input-field"
+                  type="email"
+                  value={newEmail}
+                  onChange={e => setNewEmail(e.target.value)}
+                  placeholder="e.g., john@example.com"
+                />
+              </div>
+            </>
+          )}
+
+          <div className="input-group">
+            <label>Join Date</label>
+            <input
+              className="input-field"
+              type="date"
+              value={joinedAt}
+              onChange={e => setJoinedAt(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="modal-actions">
+            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={submitting}>
+              {submitting ? 'Adding…' : 'Add Member'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ── Set Left Date Modal ── */
+function SetLeftDateModal({ groupId, membership, onClose, onSaved }) {
+  const [leftAt, setLeftAt] = useState(new Date().toISOString().slice(0, 10));
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!leftAt) { setError('Left date is required'); return; }
+    
+    const joined = new Date(membership.joinedAt);
+    const left = new Date(leftAt);
+    if (left < joined) {
+      setError(`Left date cannot be before join date (${joined.toLocaleDateString()})`);
+      return;
+    }
+
+    setSubmitting(true);
+    setError('');
+    try {
+      await api.updateMember(groupId, membership.userId, { leftAt });
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-card" style={{ maxWidth: 400 }}>
+        <h2 className="modal-title">Set Left Date</h2>
+        {error && <div className="alert alert-error" style={{ marginBottom: 12 }}><span>⚠</span> {error}</div>}
+        
+        <div style={{ marginBottom: 16, fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
+          Set the date when <strong style={{ color: 'var(--color-text-primary)' }}>{membership.user?.name}</strong> left the group.
+          They will be excluded from any new expenses dated after this date.
+        </div>
+
+        <form className="modal-form" onSubmit={handleSubmit}>
+          <div className="input-group">
+            <label>Departure Date</label>
+            <input
+              className="input-field"
+              type="date"
+              value={leftAt}
+              onChange={e => setLeftAt(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="modal-actions">
+            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+            <button type="submit" className="btn btn-danger" disabled={submitting}>
+              {submitting ? 'Saving…' : 'Set Left Date'}
             </button>
           </div>
         </form>

@@ -50,6 +50,10 @@ export const api = {
   },
   createSettlement: (data) => request('/settlements', { method: 'POST', body: JSON.stringify(data) }),
 
+  // Users
+  getUsers: () => request('/users'),
+  createUser: (data) => request('/users', { method: 'POST', body: JSON.stringify(data) }),
+
   // Import
   uploadCSV: (csvText, filename) => request('/import/upload', { method: 'POST', body: JSON.stringify({ csvText, filename }) }),
   getImportSessions: () => request('/import'),
@@ -57,3 +61,4 @@ export const api = {
   approveImport: (id) => request(`/import/${id}/approve`, { method: 'POST' }),
   rejectImport: (id) => request(`/import/${id}/reject`, { method: 'POST' }),
 };
+
