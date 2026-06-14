@@ -12,6 +12,8 @@ services:
           property: connectionString
       - key: JWT_SECRET
         generateValue: true
+      - key: NODE_VERSION
+        value: "20.11.1"
 
 databases:
   - name: splitnest-db
